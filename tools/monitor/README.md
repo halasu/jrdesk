@@ -2,7 +2,7 @@
 title: JRDesk 접속 알림 모니터 (hbbs/hbbr → n8n → Hermes Telegram + Obsidian)
 date: 2026-11-16
 tags: [jrdesk, rustdesk, n8n, 보안, 운영]
-status: 배포 대기(승인 필요)
+status: 운영 중 (v1.1)
 ---
 # JRDesk 접속 알림 모니터
 
@@ -44,3 +44,16 @@ rustdesk-hbbs/hbbr (docker logs)
 
 ## 복구
 `systemctl disable --now jrdesk-monitor` → `/opt/jrdesk-monitor`, `/etc/jrdesk-monitor.env`, 서비스 파일 삭제 → yaml에서 environment/logging 제거 후 재배포 → n8n 워크플로 비활성화.
+
+## v1.1 자동 IP 차단 (2026-11-16)
+- 같은 IP의 🔴 invalid_key가 **24시간 내 10회** 이상 → **nftables로 7일 차단**(자동 만료) → ⛔ 알림
+- 차단 범위: TCP 21115-21119, UDP 21116 (hbbs+hbbr 모두). 다른 서비스(n8n, SSH 등)는 영향 없음
+- 보호: 사설·루프백·예약 IP와 `ALLOWLIST`(env, 쉼표 구분)는 절대 차단 안 함
+- 조정: `/etc/jrdesk-monitor.env`의 `BLOCK_THRESHOLD`, `BLOCK_WINDOW_SEC`, `BLOCK_TTL_SEC`, `BLOCK_ENABLED=0`(끄기)
+- 운영 명령
+  ```bash
+  python3 /opt/jrdesk-monitor/jrdesk-log-shipper.py --list            # 차단 목록
+  python3 /opt/jrdesk-monitor/jrdesk-log-shipper.py --unblock 1.2.3.4 # 해제
+  nft delete table inet jrdesk                                       # 전체 차단 즉시 해제(서비스 재시작 시 빈 테이블 재생성)
+  ```
+- 한계: 서비스 재시작 시 카운트(24h 누적)는 초기화, 이미 걸린 차단은 nft에 남아 TTL까지 유지. VPS 재부팅 시 nft 차단 목록은 초기화됨.
