@@ -1,0 +1,19 @@
+[Unit]
+Description=JRDesk server log shipper (hbbs/hbbr -> n8n)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/jrdesk-monitor.env
+ExecStart=/usr/bin/python3 /opt/jrdesk-monitor/jrdesk-log-shipper.py
+Restart=always
+RestartSec=10
+# hardening (needs docker CLI access only)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

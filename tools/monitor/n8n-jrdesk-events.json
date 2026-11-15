@@ -1,0 +1,173 @@
+{
+  "name": "JRDesk 접속 알림 (Hermes Telegram + Obsidian)",
+  "settings": {
+    "timezone": "Asia/Seoul",
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "w1",
+      "name": "Webhook jrdesk-events",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jrdesk-events",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "jrdesk-events"
+    },
+    {
+      "id": "c1",
+      "name": "검증·포맷·기록",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// === 설정 ===\nconst SECRET = 'CHANGE_ME_SAME_AS_N8N_SECRET';      // /etc/jrdesk-monitor.env 의 N8N_SECRET 과 동일\nconst DEVICE_NAMES = { /* '123456789': '서울역-컨트롤러PC' */ };  // ID → 현장명 매핑\nconst MY_IPS = [];   // 알림 생략할 내 IP (빈 배열 = 전부 알림)\n\nconst out = [];\nconst store = $getWorkflowStaticData('global');\nstore.events = store.events || [];\nfor (const item of $input.all()) {\n  const h = item.json.headers || {};\n  if (h['x-jrdesk-secret'] !== SECRET) continue;          // 인증 실패 → 무시\n  const e = item.json.body || {};\n  const kst = new Date(e.ts || Date.now()).toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' });\n  const dev = e.device_id ? `${e.device_id}${DEVICE_NAMES[e.device_id] ? ' (' + DEVICE_NAMES[e.device_id] + ')' : ''}` : '-';\n  const label = {\n    invalid_key: '🔴 잘못된 키 접속 시도 (외부/스캔 의심)',\n    connect_attempt: '🟡 원격 접속 시도',\n    relay_start: '🟢 중계 세션 시작',\n    relay_end: '⚪ 중계 세션 종료',\n  }[e.type] || ('ℹ️ ' + e.type);\n  let text = `[JRDesk] ${label}\\n시각: ${kst} (KST)\\nIP: ${e.ip || '-'}\\n대상 ID: ${dev}\\n서버: ${e.source || '-'}`;\n  if (e.duration_sec != null) text += `\\n지속: ${Math.floor(e.duration_sec / 60)}분 ${e.duration_sec % 60}초`;\n  store.events.push({ ts: e.ts, kst, type: e.type, ip: e.ip, device: dev, dur: e.duration_sec ?? null });\n  if (store.events.length > 5000) store.events = store.events.slice(-5000);\n  if (MY_IPS.includes(e.ip)) continue;                     // 기록은 하되 알림 생략\n  out.push({ json: { text } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "t1",
+      "name": "Hermes 텔레그램 발송",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "chatId": "CHANGE_ME_HERMES_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "CHANGE_ME_Hermes_Bot"
+        }
+      }
+    },
+    {
+      "id": "s1",
+      "name": "매일 00:05",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        240
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 0,
+              "triggerAtMinute": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c2",
+      "name": "일일 로그 노트 생성",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        240
+      ],
+      "parameters": {
+        "jsCode": "const store = $getWorkflowStaticData('global');\nconst all = store.events || [];\nconst ymd = d => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }); // YYYY-MM-DD\nconst y = new Date(Date.now() - 24 * 3600 * 1000);\nconst day = ymd(y);\nconst evs = all.filter(e => ymd(new Date(e.ts)) === day);\nstore.events = all.filter(e => ymd(new Date(e.ts)) > day);   // 기록한 날짜 이전 이벤트 정리\nconst cnt = t => evs.filter(e => e.type === t).length;\nconst rows = evs.map(e => `| ${e.kst} | ${e.type} | ${e.ip || '-'} | ${e.device} | ${e.dur ?? ''} |`).join('\\n');\nconst md = `---\ntitle: JRDesk 접속 로그 ${day}\ndate: ${day}\ntags: [jrdesk, 보안, 접속로그]\nsource: n8n jrdesk-events\n---\n# JRDesk 접속 로그 ${day}\n\n관련: [[JRDesk]] · [[임팩트럼 허브]]\n\n## 요약\n- 🔴 잘못된 키 시도: ${cnt('invalid_key')}\n- 🟡 접속 시도: ${cnt('connect_attempt')}\n- 🟢 중계 세션: ${cnt('relay_start')}\n- 총 이벤트: ${evs.length}\n\n## 상세\n| 시각(KST) | 유형 | IP | 대상 ID | 지속(초) |\n|---|---|---|---|---|\n${rows || '| - | 이벤트 없음 | - | - | - |'}\n`;\nreturn [{ json: { fileName: `JRDesk_접속로그_${day}.md`, count: evs.length },\n          binary: { data: { data: Buffer.from(md, 'utf8').toString('base64'), mimeType: 'text/markdown', fileName: `JRDesk_접속로그_${day}.md` } } }];"
+      }
+    },
+    {
+      "id": "g1",
+      "name": "Obsidian(Drive) 업로드",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        480,
+        240
+      ],
+      "parameters": {
+        "name": "={{ $json.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "CHANGE_ME_DRIVE_FOLDER_ID"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "CHANGE_ME_Google_Drive"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook jrdesk-events": {
+      "main": [
+        [
+          {
+            "node": "검증·포맷·기록",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "검증·포맷·기록": {
+      "main": [
+        [
+          {
+            "node": "Hermes 텔레그램 발송",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매일 00:05": {
+      "main": [
+        [
+          {
+            "node": "일일 로그 노트 생성",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "일일 로그 노트 생성": {
+      "main": [
+        [
+          {
+            "node": "Obsidian(Drive) 업로드",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false
+}
