@@ -1,0 +1,17 @@
+name: JRDesk mac runner probe
+
+# Diagnostic only: checks which macOS hosted runner labels this account can acquire.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-14, macos-15, macos-26, macos-15-intel]
+    steps:
+      - run: sw_vers && uname -m && xcodebuild -version
